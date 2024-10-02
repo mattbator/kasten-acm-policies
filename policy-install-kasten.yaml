@@ -1,0 +1,124 @@
+# Deploys Kasten using the Kasten K10 (Free) Operator
+# NOTE: This policy does not join the deployed Kasten instance to Kasten multi-cluster manager
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: install-kasten
+  annotations:
+    policy.open-cluster-management.io/categories: CP Contingency Planning
+    policy.open-cluster-management.io/standards: NIST SP 800-53
+    policy.open-cluster-management.io/controls: CP-9 System Backup, CP-10 System Recovery and Reconstitution
+    policy.open-cluster-management.io/description: "Deploys Veeam Kasten"
+spec:
+  disabled: false
+  policy-templates:
+  - objectDefinition:
+      apiVersion: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      metadata:
+        name: policy-kasten-namespace
+      spec:
+        object-templates:
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: kasten-io
+        remediationAction: enforce
+        severity: high
+  # NOTE: To install Kasten K10 (Enterprise-PAYGO) or
+  # Kasten K10 (Enterprise-Term) versions of the operator,
+  # replace `k10-kasten-operator-rhmp` references below with
+  # `k10-kasten-operator-paygo-rhmp` or `k10-kasten-operator-term-rhmp`
+  - objectDefinition:
+      apiVersion: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      metadata:
+        name: policy-kasten-operator
+      spec:
+        object-templates:
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: operators.coreos.com/v1
+            kind: OperatorGroup
+            metadata:
+              annotations:
+                olm.providedAPIs: K10.v1alpha1.apik10.kasten.io,K10restore.v1alpha1.apik10.kasten.io
+              name: k10-kasten-operator-rhmp
+              namespace: kasten-io
+            spec:
+              targetNamespaces:
+              - kasten-io
+              upgradeStrategy: Default
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: operators.coreos.com/v1alpha1
+            kind: Subscription
+            metadata:
+              name: k10-kasten-operator-rhmp
+              namespace: kasten-io
+            spec:
+              name: k10-kasten-operator-rhmp
+              channel: stable
+              installPlanApproval: Automatic
+              source: redhat-marketplace
+              sourceNamespace: openshift-marketplace
+        remediationAction: enforce
+        severity: high
+  # Deploys the K10 instance
+  # NOTE: Example Route requires additional configuration
+  # for TLS. See docs.kasten.io for more details.
+  - objectDefinition:
+      apiVersion: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      metadata:
+        name: policy-kasten-k10
+      spec:
+        remediationAction: enforce
+        severity: high
+        object-templates:
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: apik10.kasten.io/v1alpha1
+            kind: K10
+            metadata:
+              name: k10
+              namespace: kasten-io
+            spec:
+              auth:
+                tokenAuth:
+                  enabled: true
+              route:
+                enabled: true
+              scc:
+                create: true
+---
+apiVersion: apps.open-cluster-management.io/v1
+kind: PlacementRule
+metadata:
+  name: install-kasten-placement-rule
+spec:
+  clusterSelector:
+    matchExpressions:
+      - key: data-protection
+        operator: In
+        values:
+          - kasten
+      - key: vendor
+        operator: In
+        values:
+          - OpenShift
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: install-kasten-placement-binding
+placementRef:
+  name: install-kasten-placement-rule
+  apiGroup: apps.open-cluster-management.io
+  kind: PlacementRule
+subjects:
+  - name: install-kasten
+    apiGroup: policy.open-cluster-management.io
+    kind: Policy

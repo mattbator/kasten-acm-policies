@@ -1,0 +1,111 @@
+# Example ACM policy to distribute and report on Kyverno admission controller policy pushed to managed clusters that restricts ability to create Kasten Location Profiles without immutability enabled
+# NOTE: This policy was generated using Kasten Kyverno policies available in the Kyverno policies repository (https://github.com/kyverno/policies/tree/main/kasten) and the Open Cluster Management policy generator (https://github.com/open-cluster-management-io/policy-collection/tree/main/policygenerator)
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  annotations:
+    policy.open-cluster-management.io/categories: CM Configuration Management
+    policy.open-cluster-management.io/controls: CM-2 Baseline Configuration
+    policy.open-cluster-management.io/description: ""
+    policy.open-cluster-management.io/standards: NIST SP 800-53
+  name: policy-kasten-immutable-location-profile
+spec:
+  disabled: false
+  policy-templates:
+  - objectDefinition:
+      apiVersion: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      metadata:
+        name: policy-kasten-immutable-location-profile
+      spec:
+        object-templates:
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: kyverno.io/v1
+            kind: Policy
+            metadata:
+              annotations:
+                policies.kyverno.io/category: K10
+                policies.kyverno.io/description: Ensure Kasten Location Profiles have
+                  enabled immutability to prevent unintentional or malicious changes
+                  to backup data.
+                policies.kyverno.io/subject: config.kio.kasten.io/v1alpha1/Profile
+                policies.kyverno.io/title: Enforce Immutable Kasten Location Profile
+              name: kasten-immutable-location-profile
+              namespace: kasten-io
+            spec:
+              rules:
+              - match:
+                  resources:
+                    kinds:
+                    - Profile
+                name: enforce-immutable-location-profile
+                validate:
+                  message: All Kasten Location Profiles must have immutability enabled.
+                  pattern:
+                    spec:
+                      (type): Location
+                      locationSpec:
+                        objectStore:
+                          protectionPeriod: '*'
+              validationFailureAction: Enforce
+        remediationAction: inform
+        severity: medium
+  - objectDefinition:
+      apiVersion: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      metadata:
+        name: inform-kyverno-kasten-immutable-location-profile
+      spec:
+        namespaceSelector:
+          exclude:
+          - kube-*
+          include:
+          - '*'
+        object-templates:
+        - complianceType: mustnothave
+          objectDefinition:
+            apiVersion: wgpolicyk8s.io/v1alpha2
+            kind: ClusterPolicyReport
+            results:
+            - policy: kasten-immutable-location-profile
+              result: fail
+        - complianceType: mustnothave
+          objectDefinition:
+            apiVersion: wgpolicyk8s.io/v1alpha2
+            kind: PolicyReport
+            results:
+            - policy: kasten-immutable-location-profile
+              result: fail
+        remediationAction: inform
+        severity: medium
+  remediationAction: inform
+---
+apiVersion: apps.open-cluster-management.io/v1
+kind: PlacementRule
+metadata:
+  name: policy-kasten-immutable-location-profile-placement-rule
+spec:
+  clusterSelector:
+    matchExpressions:
+    - key: data-protection
+      operator: In
+      values:
+      - kasten
+    - key: vendor
+      operator: In
+      values:
+      - OpenShift
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: binding-policy-kasten-immutable-location-profile
+placementRef:
+  apiGroup: apps.open-cluster-management.io
+  kind: PlacementRule
+  name: policy-kasten-immutable-location-profile-placement-rule
+subjects:
+- apiGroup: policy.open-cluster-management.io
+  kind: Policy
+  name: policy-kasten-immutable-location-profile

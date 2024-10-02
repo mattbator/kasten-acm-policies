@@ -1,0 +1,185 @@
+# Deploys Kasten using the Kasten K10 (Free) Operator
+# Uses External Secrets to provide the `mc-join` Secret on the managed cluster to automate joining the Kasten multi-cluster manager
+# NOTE: May require updating `mc-join-config` ConfigMap `.data.cluster-ingress` to reflect proper Route URL for deployed Kasten instance
+# NOTE: May require updating `mc-join` ExternalSecret to reflect secrets management backend/path
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: install-kasten
+  annotations:
+    policy.open-cluster-management.io/categories: CP Contingency Planning
+    policy.open-cluster-management.io/standards: NIST SP 800-53
+    policy.open-cluster-management.io/controls: CP-9 System Backup, CP-10 System Recovery and Reconstitution
+    policy.open-cluster-management.io/description: "Deploys Veeam Kasten"
+spec:
+  disabled: false
+  policy-templates:
+  - objectDefinition:
+      apiVersion: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      metadata:
+        name: policy-kasten-namespace
+      spec:
+        object-templates:
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: kasten-io
+        remediationAction: enforce
+        severity: high
+  # Deploys Kasten K10 (Free) operator
+  # NOTE: To install Kasten K10 (Enterprise-PAYGO) or
+  # Kasten K10 (Enterprise-Term) versions of the operator,
+  # replace `k10-kasten-operator-rhmp` references below with
+  # `k10-kasten-operator-paygo-rhmp` or `k10-kasten-operator-term-rhmp`
+  - objectDefinition:
+      apiVersion: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      metadata:
+        name: policy-kasten-operator
+      spec:
+        object-templates:
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: operators.coreos.com/v1
+            kind: OperatorGroup
+            metadata:
+              annotations:
+                olm.providedAPIs: K10.v1alpha1.apik10.kasten.io,K10restore.v1alpha1.apik10.kasten.io
+              name: k10-kasten-operator-rhmp
+              namespace: kasten-io
+            spec:
+              targetNamespaces:
+              - kasten-io
+              upgradeStrategy: Default
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: operators.coreos.com/v1alpha1
+            kind: Subscription
+            metadata:
+              name: k10-kasten-operator-rhmp
+              namespace: kasten-io
+            spec:
+              name: k10-kasten-operator-rhmp
+              channel: stable
+              installPlanApproval: Automatic
+              source: redhat-marketplace
+              sourceNamespace: openshift-marketplace
+        remediationAction: enforce
+        severity: high
+  # Deploys the K10 instance
+  # NOTE: Example Route requires additional configuration
+  # for TLS. See docs.kasten.io for more details.
+  - objectDefinition:
+      apiVersion: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      metadata:
+        name: policy-kasten-k10
+      spec:
+        remediationAction: enforce
+        severity: high
+        object-templates:
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: apik10.kasten.io/v1alpha1
+            kind: K10
+            metadata:
+              name: k10
+              namespace: kasten-io
+            spec:
+              auth:
+                tokenAuth:
+                  enabled: true
+              route:
+                enabled: true
+              scc:
+                create: true
+  # Joins Kasten multi-cluster instance
+  # Using ACM cluster name as Kasten cluster name
+  - objectDefinition:
+      apiVersion: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      metadata:
+        name: policy-kasten-join-mc
+      spec:
+        remediationAction: enforce
+        severity: high
+        object-templates:
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: mc-join-config
+              namespace: kasten-io
+            data:
+              cluster-name: '{{ fromClusterClaim "name" }}'
+              cluster-ingress: 'http://{{ (lookup "route.openshift.io/v1" "Route" "kasten-io" "k10-route").spec.host }}/k10/'
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: external-secrets.io/v1beta1
+            kind: ExternalSecret
+            metadata:
+              name: mc-join
+              namespace: kasten-io
+            spec:
+              refreshInterval: "15s"
+              secretStoreRef:
+                name: kasten-secrets
+                kind: ClusterSecretStore
+              target:
+                name: mc-join
+              data:
+              - secretKey: token
+                remoteRef:
+                  key: secrets/kasten/mc-join
+                  property: token
+  # Determines if multi-cluster join was successful
+  - objectDefinition:
+      apiVersion: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      metadata:
+        name: policy-kasten-join-mc-status
+      spec:
+        remediationAction: informOnly
+        severity: high
+        object-templates:
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: v1
+            kind: Secret
+            type: dist.kio.kasten.io/clusterinfo
+            metadata:
+              name: mc-cluster-info
+              namespace: kasten-io
+---
+apiVersion: apps.open-cluster-management.io/v1
+kind: PlacementRule
+metadata:
+  name: install-kasten-placement-rule
+spec:
+  clusterSelector:
+    matchExpressions:
+      - key: data-protection
+        operator: In
+        values:
+          - kasten
+      - key: vendor
+        operator: In
+        values:
+          - OpenShift
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: install-kasten-placement-binding
+placementRef:
+  name: install-kasten-placement-rule
+  apiGroup: apps.open-cluster-management.io
+  kind: PlacementRule
+subjects:
+  - name: install-kasten
+    apiGroup: policy.open-cluster-management.io
+    kind: Policy
